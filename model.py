@@ -95,6 +95,8 @@ class Model:
 
 def main(save_fn='testing', gpu_id=None):
 
+    print_parameters()
+
     if gpu_id is not None:
         os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
 
@@ -164,6 +166,9 @@ def main(save_fn='testing', gpu_id=None):
             print('Task {:2} | Loss: {:5.3f} | Acc: {:5.3f}'.format(task, loss, acc))
 
 
+def print_parameters():
+    print('{}-shot, {}-way, {} steps'.format(par['shot_batch_size'], par['n_test_tasks'], par['k_steps']))
+    print('Batch size of {} for pre-training'.format(par['pre_train_batch_size']))
 
 
 if __name__ == '__main__':
