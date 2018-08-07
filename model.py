@@ -51,8 +51,9 @@ class Model:
     def run_model(self, x):
 
         if par['conv_input']:
-            x = self.convolutional(x)
+            x = self.convolutional(x[...,tf.newaxis])
 
+        x = tf.reshape(x, [-1, par['n_input']])
         y = self.feed_forward(x)
 
         return y
@@ -60,8 +61,14 @@ class Model:
 
     def convolutional(self, x):
 
-        pass
+        for f in [32, 16]:
+            conv = tf.layers.conv2d(x, filters=f, kernel_size=[3,3], \
+                activation=tf.tanh, padding='same', trainable=True)
+            conv = tf.layers.conv2d(conv, filters=f, kernel_size=[3,3], \
+                activation=tf.tanh, padding='same', trainable=True)
+            x    = tf.layers.max_pooling2d(conv, 3, 3, padding='same')
 
+        return x
 
     def feed_forward(self, x):
 
@@ -138,7 +145,7 @@ def main(save_fn='testing', gpu_id=None):
 
     tf.reset_default_graph()
 
-    x = tf.placeholder(tf.float32, [par['k_steps'], None, par['n_input']], 'input')
+    x = tf.placeholder(tf.float32, [par['k_steps'], None, *par['input_shape']], 'input')
     y = tf.placeholder(tf.float32, [par['k_steps'], None, par['n_output']], 'output')
     s = tf.placeholder(tf.float32, [], 'step')
 
