@@ -14,12 +14,15 @@ global par
 par = {
     # General parameters
     'save_dir'              : './savedir/',
-    'learning_rate'         : 0.001,
-    'task'                  : 'mnist',
+    'meta_learning_rate'    : 0.001,
+    'task_learning_rate'    : 0.001,
+    'task'                  : 'omniglot',
+    'conv_input'            : False,
 
     # Task specs
-    'n_tasks'               : 100,
-    'layer_dims'            : [28**2, 400, 400, 10],
+    'n_tasks'               : 100,          # Randomly pre-generated MNIST tasks
+    'input_shape'           : [105, 105],
+    'hidden_layers'         : [400, 400],
 
     # Reptile-specific parameters
     'n_meta_tasks'          : 20,
@@ -34,10 +37,11 @@ par = {
 
     # Training specs
     'test_batch_size'       : 200,
-    'pre_train_batch_size'  : 200,
+    'pre_train_batch_size'  : 10,
+    'pre_train_batches'     : int(5e4),
     'shot_batch_size'       : 5,
-    'n_meta_batches'        : 201,
-    'n_test_batches'        : 201,
+    'eval_iterations'       : 50,
+    'testing_repetitions'   : 100,
 
 }
 
@@ -50,8 +54,16 @@ def update_dependencies():
     """
     Updates all parameter dependencies
     """
-    par['n_input'] = par['layer_dims'][0]
-    par['n_output'] = par['layer_dims'][-1]
+
+    if par['task'] == 'mnist':
+        par['n_input'] = 28**2
+        par['n_output'] = 10
+    elif par['task'] == 'omniglot':
+        par['n_input'] = 105**2
+        par['n_output'] = par['n_meta_tasks'] + par['n_test_tasks']
+
+    par['layer_dims'] = [par['n_input']] + par['hidden_layers'] + [par['n_output']]
+
 
     par['n_layers'] = len(par['layer_dims'])
     if par['task'] == 'mnist' or par['task'] == 'imagenet':
