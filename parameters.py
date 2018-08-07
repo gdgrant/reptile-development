@@ -17,17 +17,16 @@ par = {
     'meta_learning_rate'    : 0.001,
     'task_learning_rate'    : 0.001,
     'task'                  : 'omniglot',
-    'conv_input'            : False,
+    'conv_input'            : True,
 
     # Task specs
     'n_tasks'               : 100,          # Randomly pre-generated MNIST tasks
-    'input_shape'           : [105, 105],
     'hidden_layers'         : [400, 400],
 
     # Reptile-specific parameters
     'n_meta_tasks'          : 20,
     'n_test_tasks'          : 5,
-    'k_steps'               : 5,
+    'k_steps'               : 1,
     'epsilon'               : 1.,
 
     # Dropout
@@ -38,7 +37,7 @@ par = {
     # Training specs
     'test_batch_size'       : 200,
     'pre_train_batch_size'  : 10,
-    'pre_train_batches'     : int(5e4),
+    'pre_train_batches'     : int(1e5)*5,
     'shot_batch_size'       : 5,
     'eval_iterations'       : 50,
     'testing_repetitions'   : 100,
@@ -56,10 +55,12 @@ def update_dependencies():
     """
 
     if par['task'] == 'mnist':
-        par['n_input'] = 28**2
+        par['input_shape'] = [28, 28]
+        par['n_input'] = np.product(par['input_shape'])
         par['n_output'] = 10
     elif par['task'] == 'omniglot':
-        par['n_input'] = 105**2
+        par['input_shape'] = [105, 105]
+        par['n_input'] = 2304 if par['conv_input'] else np.product(par['input_shape'])
         par['n_output'] = par['n_meta_tasks'] + par['n_test_tasks']
 
     par['layer_dims'] = [par['n_input']] + par['hidden_layers'] + [par['n_output']]
