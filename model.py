@@ -50,10 +50,11 @@ class Model:
 
     def run_model(self, x):
 
+
         if par['conv_input']:
             x = self.convolutional(x[...,tf.newaxis])
 
-        x = tf.reshape(x, [-1, par['n_input']])
+        x = tf.reshape(x, [-1, np.product(x.shape[1:])])
         y = self.feed_forward(x)
 
         return y
@@ -61,12 +62,10 @@ class Model:
 
     def convolutional(self, x):
 
-        for f in [32, 16]:
-            conv = tf.layers.conv2d(x, filters=f, kernel_size=[3,3], \
-                activation=tf.tanh, padding='same', trainable=True)
-            conv = tf.layers.conv2d(conv, filters=f, kernel_size=[3,3], \
-                activation=tf.tanh, padding='same', trainable=True)
-            x    = tf.layers.max_pooling2d(conv, 3, 3, padding='same')
+        for _ in range(4):
+            conv = tf.layers.conv2d(x, filters=64, kernel_size=3, strides=2, padding='same')
+            norm = tf.layers.batch_normalization(conv, training=True)
+            x = tf.nn.relu(norm)
 
         return x
 
@@ -79,6 +78,7 @@ class Model:
 
             if n < par['n_layers']-2:
                 x = tf.nn.relu(x @ W + b)
+                x = tf.layers.dropout(x, rate=par['dropout_drop_pct'])
             else:
                 y = x @ W + b
 
@@ -95,7 +95,7 @@ class Model:
         self.backup_vars = [tf.get_variable(var.op.name+'_backup', initializer=var, trainable=False) for var in tf.trainable_variables()]
 
         k_opt_group = []
-        for x, y_hat in zip(self.input_data, self.output_data):
+        for k, (x, y_hat) in enumerate(zip(self.input_data, self.output_data)):
             y = self.run_model(x)
             loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=y, labels=y_hat+eps))
             k_opt_group.append(meta_opt.minimize(loss))
@@ -105,6 +105,7 @@ class Model:
             for var, backup_var in zip(tf.trainable_variables(), self.backup_vars):
                 assigns.append(tf.assign(var, backup_var + self.step_size*(var-backup_var)))
         self.pre_train = tf.group(*assigns)
+
 
         ### Regular training
         x = self.input_data[0]
