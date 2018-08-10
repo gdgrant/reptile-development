@@ -10,56 +10,57 @@ class Stimulus:
 
         self.num_training_languages = 30
         self.num_testing_languages = 20
+        self.num_character_samples = 20
 
-        self.training_languages = os.listdir('./omniglot/images_background/')
-        self.testing_languages = os.listdir('./omniglot/images_evaluation/')
-
-        self.select_characters()
-
-
-    def select_characters(self):
-
-        self.meta_characters = []
-        for n in range(par['n_meta_tasks']):
-            lang = np.random.choice(self.training_languages)
-            char = np.random.choice(os.listdir('./omniglot/images_background/'+lang))
-            self.meta_characters.append('./omniglot/images_background/'+lang+'/'+char)
-
-        self.test_characters = []
-        for n in range(par['n_test_tasks']*par['testing_repetitions']):
-            lang = np.random.choice(self.testing_languages)
-            char = np.random.choice(os.listdir('./omniglot/images_evaluation/'+lang))
-            self.test_characters.append('./omniglot/images_evaluation/'+lang+'/'+char)
+        self.training_characters = self.get_character_paths('./omniglot/images_background/')
+        self.testing_characters = self.get_character_paths('./omniglot/images_evaluation/')
 
 
-    def generate_omniglot_batch(self, char_path, label, batch_size):
+    def get_character_paths(self, dir):
 
-        batch_data = np.zeros([batch_size, 105, 105], dtype=np.float32)
+        paths = []
+        for l in os.listdir(dir):
+            for c in os.listdir(dir+l):
+                paths.append(dir+l+'/'+c)
+
+        return paths
+
+
+    def make_task(self, num_samples, eval=False):
+
+        chars = self.testing_characters if eval else self.training_characters
+        self.task_chars = np.random.choice(chars, size=par['n_ways'], replace=False)
+
+        self.train_samples = []
+        self.test_samples = []
+        for n in range(par['n_ways']):
+            sample_set = np.random.choice(self.num_character_samples, \
+                size=num_samples, replace=False)
+            train_set = sample_set[:par['n_shots']]
+            test_set  = sample_set[par['n_shots']:]
+
+            self.train_samples.append(train_set)
+            self.test_samples.append(test_set)
+
+
+    def make_batch(self, batch_size, test=False):
+
+        batch_data = np.zeros([batch_size, 26, 26], dtype=np.float32)
         batch_labels = np.zeros([batch_size, par['n_output']], dtype=np.float32)
-        samples = os.listdir(char_path)
+        samples = self.test_samples if test else self.train_samples
 
         for b in range(batch_size):
+            char_index   = np.random.choice(len(self.task_chars))
+            sample_index = np.random.choice(samples[char_index])
 
-            s = np.random.choice(samples)
-            batch_data[b,:,:] = 1 - plt.imread(char_path+'/'+s)
-            batch_labels[b,label] = 1
+            s = os.listdir(self.task_chars[char_index])[sample_index]
+            p = self.task_chars[char_index]+'/'+s
 
-        return batch_data, batch_labels
+            base = 1 - plt.imread(p)
+            for i in range(2):
+                base = (base[:-1:2,:-1:2]+base[1::2,1::2])/2
 
+            batch_data[b,:,:] = base
+            batch_labels[b,char_index] = 1
 
-    def make_batch(self, batch_size, task_id, test=False):
-        """ Based on the task number and testing status, generate a randomly
-            selected or generated batch of images. """
-
-        if test:
-            char_path = self.test_characters[task_id]
-            label = int(task_id%par['n_test_tasks'] + par['n_meta_tasks'])
-        else:
-            char_path = self.meta_characters[task_id]
-            label = task_id
-
-        batch_data, batch_labels = self.generate_omniglot_batch(char_path, label, batch_size)
-        mask = -1
-
-        # Give the images, labels, and mask to the network
-        return batch_data, batch_labels, mask
+        return batch_data, batch_labels, -1
