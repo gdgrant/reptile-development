@@ -179,7 +179,7 @@ def update_dependencies():
     ###
 
     # Specify initial RNN state
-    par['h_init'] = 0.1*np.ones((par['batch_size'], par['n_hidden']), dtype=np.float32)
+    #par['h_init'] = 0.1*np.ones((par['batch_size'], par['n_hidden']), dtype=np.float32)
 
     # Initialize weights
     c = 0.05
@@ -267,29 +267,29 @@ def update_dependencies():
     par['U'] = np.ones((par['n_hidden'], 1), dtype=np.float32)
 
     # initial synaptic values
-    par['syn_x_init'] = np.zeros((par['n_hidden'], par['batch_size']), dtype=np.float32)
-    par['syn_u_init'] = np.zeros((par['n_hidden'], par['batch_size']), dtype=np.float32)
+    #par['syn_x_init'] = np.zeros((par['n_hidden'], par['batch_size']), dtype=np.float32)
+    #par['syn_u_init'] = np.zeros((par['n_hidden'], par['batch_size']), dtype=np.float32)
 
     for i in range(par['n_hidden']):
         if par['synapse_type'][i] == 1:
             par['alpha_stf'][i,0] = par['dt']/par['tau_slow']
             par['alpha_std'][i,0] = par['dt']/par['tau_fast']
             par['U'][i,0] = 0.15
-            par['syn_x_init'][i,:] = 1
-            par['syn_u_init'][i,:] = par['U'][i,0]
+            #par['syn_x_init'][i,:] = 1
+            #par['syn_u_init'][i,:] = par['U'][i,0]
 
         elif par['synapse_type'][i] == 2:
             par['alpha_stf'][i,0] = par['dt']/par['tau_fast']
             par['alpha_std'][i,0] = par['dt']/par['tau_slow']
             par['U'][i,0] = 0.45
-            par['syn_x_init'][i,:] = 1
-            par['syn_u_init'][i,:] = par['U'][i,0]
+            #par['syn_x_init'][i,:] = 1
+            #par['syn_u_init'][i,:] = par['U'][i,0]
 
     par['alpha_stf'] = np.transpose(par['alpha_stf'])
     par['alpha_std'] = np.transpose(par['alpha_std'])
     par['U'] = np.transpose(par['U'])
-    par['syn_x_init'] = np.transpose(par['syn_x_init'])
-    par['syn_u_init'] = np.transpose(par['syn_u_init'])
+    #par['syn_x_init'] = np.transpose(par['syn_x_init'])
+    #par['syn_u_init'] = np.transpose(par['syn_u_init'])
 
 
 def gen_gating():

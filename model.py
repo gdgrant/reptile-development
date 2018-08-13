@@ -9,7 +9,7 @@ from itertools import product
 
 # Model modules
 from parameters import *
-import stimulus
+import cognitive_stimulus as stimulus
 import AdamOpt
 
 # Match GPU IDs to nvidia-smi command
@@ -30,6 +30,8 @@ class Model:
         self.target_data        = tf.unstack(target_data, axis=0)
         self.gating             = tf.reshape(gating, [1,-1])
         self.time_mask          = tf.unstack(mask, axis=0)
+
+        self.batch_by_one = tf.ones_like(self.input_data[0][:,0:1])
 
         # Declare all Tensorflow variables
         self.declare_variables()
@@ -73,6 +75,11 @@ class Model:
             self.W_rnn_eff = (tf.constant(par['EI_matrix']) @ tf.nn.relu(self.var_dict['W_rnn'])) \
                 if par['EI'] else self.var_dict['W_rnn']
 
+        with tf.variable_scope('init'):
+            self.var_dict['h_init'] = tf.get_variable('h', initializer=0.1*tf.ones([1,par['n_hidden']]))
+            if par['architecture'] == 'LSTM':
+                self.var_dict['c_init'] = tf.get_variable('c', initializer=0.1*tf.ones([1,par['n_hidden']]))
+
 
     def rnn_cell_loop(self):
         """ Initialize parameters and execute loop through
@@ -80,14 +87,12 @@ class Model:
 
         # Specify training method outputs
         self.output = []
-        self.mask = []
-        self.mask.append(tf.constant(np.ones((par['batch_size'], 1), dtype = np.float32)))
+        self.mask = [self.batch_by_one]
         if par['training_method'] == 'RL':
             self.pol_out = self.output  # For interchangeable use
             self.val_out = []
             self.action = []
-            self.reward = []
-            self.reward.append(tf.constant(np.zeros((par['batch_size'], par['n_val']), dtype = np.float32)))
+            self.reward = [self.batch_by_one @ tf.constant(0., shape=[1,par['n_val']])]
 
         # Initialize state records
         self.h      = []
@@ -96,13 +101,26 @@ class Model:
 
         # Initialize network state
         if par['architecture'] == 'BIO':
-            h = self.gating*tf.constant(par['h_init'])
-            c = tf.constant(par['h_init'])
+            h = self.gating * (self.batch_by_one @ self.var_dict['h_init'])
+            c = tf.ones_like(h)
         elif par['architecture'] == 'LSTM':
-            h = tf.zeros_like(par['h_init'])
-            c = tf.zeros_like(par['h_init'])
-        syn_x = tf.constant(par['syn_x_init'])
-        syn_u = tf.constant(par['syn_u_init'])
+            h = self.gating * (self.batch_by_one @ self.var_dict['h_init'])
+            c = self.gating * (self.batch_by_one @ self.var_dict['c_init'])
+
+        syn_x, syn_u = [], []
+        for i in range(par['n_hidden']):
+            t = self.batch_by_one
+            if par['synapse_type'][i] == 1:
+                sx = 1 * t
+                su = 0.15 * t
+            elif par['synapse_type'][i] == 2:
+                sx = 1 * t
+                su = 0.45 * t
+            syn_x.append(sx)
+            syn_u.append(su)
+
+        syn_x = tf.stack(syn_x, axis=1)[...,0]
+        syn_u = tf.stack(syn_u, axis=1)[...,0]
         mask  = self.mask[0]
 
         # Loop through the neural inputs, indexed in time
@@ -172,7 +190,7 @@ class Model:
             # Compute hidden state
             h = self.gating*tf.nn.relu((1-par['alpha_neuron'])*h \
               + par['alpha_neuron']*(rnn_input @ self.var_dict['W_in'] + h_post @ self.W_rnn_eff + self.var_dict['b_rnn']) \
-              + tf.random_normal(h.shape, 0, par['noise_rnn'], dtype=tf.float32))
+              + tf.random_normal(tf.shape(h), 0, par['noise_rnn'], dtype=tf.float32))
             c = tf.constant(-1.)
 
         elif par['architecture'] == 'LSTM':
@@ -210,7 +228,7 @@ class Model:
             RL_loss = tf.constant(0.)
 
             # Task loss (cross entropy)
-            self.pol_loss = tf.reduce_mean([mask*tf.nn.softmax_cross_entropy_with_logits(logits=y, \
+            self.pol_loss = tf.reduce_mean([mask*tf.nn.softmax_cross_entropy_with_logits_v2(logits=y, \
                 labels=target, dim=1) for y, target, mask in zip(self.output, self.target_data, self.time_mask)])
             sup_loss = self.pol_loss
 
@@ -254,26 +272,9 @@ class Model:
 
         # Make reset operations
         self.reset_adam_op = adam_optimizer.reset_params()
-        self.reset_weights()
 
         # Make saturation correction operation
         self.make_recurrent_weights_positive()
-
-
-    def reset_weights(self):
-        """ Make new weights, if requested """
-
-        reset_weights = []
-        for var in tf.trainable_variables():
-            if 'b' in var.op.name:
-                # reset biases to 0
-                reset_weights.append(tf.assign(var, var*0.))
-            elif 'W' in var.op.name:
-                # reset weights to initial-like conditions
-                new_weight = initialize_weight(var.shape, par['connection_prob'])
-                reset_weights.append(tf.assign(var,new_weight))
-
-        self.reset_weights = tf.group(*reset_weights)
 
 
     def make_recurrent_weights_positive(self):
@@ -299,9 +300,9 @@ def supervised_learning(save_fn='test.pkl', gpu_id=None):
     tf.reset_default_graph()
 
     # Define all placeholders
-    x = tf.placeholder(tf.float32, [par['num_time_steps'], par['batch_size'], par['n_input']], 'stim')
-    y = tf.placeholder(tf.float32, [par['num_time_steps'], par['batch_size'], par['n_output']], 'out')
-    m = tf.placeholder(tf.float32, [par['num_time_steps'], par['batch_size']], 'mask')
+    x = tf.placeholder(tf.float32, [par['num_time_steps'], None, par['n_input']], 'stim')
+    y = tf.placeholder(tf.float32, [par['num_time_steps'], None, par['n_output']], 'out')
+    m = tf.placeholder(tf.float32, [par['num_time_steps'], None], 'mask')
     g = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
 
     # Set up stimulus and accuracy recording
@@ -327,10 +328,10 @@ def supervised_learning(save_fn='test.pkl', gpu_id=None):
 
         # Begin training loop, iterating over tasks
         for task in range(par['n_tasks']):
-            for i in range(par['n_train_batches']):
+            for i in range(par['pre_train_batches']):
 
                 # Generate a batch of stimulus data for training
-                name, stim_in, y_hat, mk, _ = stim.generate_trial(task)
+                name, stim_in, y_hat, mk, _ = stim.generate_trial(task, par['pre_train_batch_size'])
 
                 # Put together the feed dictionary
                 feed_dict = {x:stim_in, y:y_hat, g:par['gating'][task], m:mk}
@@ -340,11 +341,12 @@ def supervised_learning(save_fn='test.pkl', gpu_id=None):
                     model.spike_loss, model.output], feed_dict=feed_dict)
 
                 # Display network performance
-                if i%500 == 0:
-                    acc = get_perf(y_hat, output, mk)
-                    print('Iter {} | Task name {} | Accuracy {} | Loss {} | Aux Loss {} | Spike Loss {}'.format(\
-                        i, name, acc, loss, AL, spike_loss))
+                if i%25 == 0:
+                    acc = get_perf(y_hat, output, mk, par['pre_train_batch_size'])
+                    print('Iter {} | Task name {} | Accuracy {} | Loss {} | Spike Loss {}'.format(\
+                        i, name, acc, loss, spike_loss))
 
+            quit('Quit at end of task 0.')
             # Test all tasks at the end of each learning session
             num_reps = 10
             task_activity_list = []
@@ -352,7 +354,7 @@ def supervised_learning(save_fn='test.pkl', gpu_id=None):
                 for r in range(num_reps):
 
                     # Generate stimulus batch for testing
-                    name, stim_in, y_hat, mk, _ = stim.generate_trial(task_prime)
+                    name, stim_in, y_hat, mk, _ = stim.generate_trial(task_prime, par['batch_size'])
 
                     # Assemble feed dict and run model
                     feed_dict = {x:stim_in, g:par['gating'][task_prime]}
@@ -434,7 +436,7 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
             for i in range(par['n_train_batches']):
 
                 # Generate a batch of stimulus data for training
-                name, input_data, _, mk, reward_data = stim.generate_trial(task)
+                name, input_data, _, mk, reward_data = stim.generate_trial(task, par['batch_size'])
                 mk = mk[...,np.newaxis]
 
                 # Put together the feed dictionary
@@ -466,7 +468,7 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
                 for r in range(num_reps):
 
                     # make batch of training data
-                    name, input_data, _, mk, reward_data = stim.generate_trial(task_prime)
+                    name, input_data, _, mk, reward_data = stim.generate_trial(task_prime, par['batch_size'])
                     mk = mk[..., np.newaxis]
 
                     reward_list, h = sess.run([model.reward, model.h], feed_dict = {x:input_data, target: reward_data, \
@@ -529,13 +531,13 @@ def print_reinforcement_results(iter_num, model_performance):
       ' | Entropy loss {:0.4f}'.format(entropy_loss))
 
 
-def get_perf(target, output, mask):
+def get_perf(target, output, mask, batch_size):
     """ Calculate task accuracy by comparing the actual network output
     to the desired output only examine time points when test stimulus is
     on in another words, when target[:,:,-1] is not 0 """
 
     output = np.stack(output, axis=0)
-    mk = mask*np.reshape(target[:,:,-1] == 0, (par['batch_size'], par['num_time_steps'], 1))
+    mk = mask*np.reshape(target[:,:,-1] == 0, (batch_size, par['num_time_steps'], 1))
 
     target = np.argmax(target, axis = 2)
     output = np.argmax(output, axis = 2)
@@ -557,12 +559,12 @@ def append_model_performance(model_performance, reward, entropy_loss, pol_loss, 
 
 def generate_placeholders():
 
-    mask = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], 1])
-    x = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_input']])  # input data
-    target = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_pol']])  # input data
-    pred_val = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_val'], ])
-    actual_action = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_pol']])
-    advantage  = tf.placeholder(tf.float32, shape=[par['num_time_steps'], par['batch_size'], par['n_val']])
+    mask = tf.placeholder(tf.float32, shape=[par['num_time_steps'], None, 1])
+    x = tf.placeholder(tf.float32, shape=[par['num_time_steps'], None, par['n_input']])  # input data
+    target = tf.placeholder(tf.float32, shape=[par['num_time_steps'], None, par['n_pol']])  # input data
+    pred_val = tf.placeholder(tf.float32, shape=[par['num_time_steps'], None, par['n_val'], ])
+    actual_action = tf.placeholder(tf.float32, shape=[par['num_time_steps'], None, par['n_pol']])
+    advantage  = tf.placeholder(tf.float32, shape=[par['num_time_steps'], None, par['n_val']])
     gating = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
 
     return x, target, mask, pred_val, actual_action, advantage, mask, gating
