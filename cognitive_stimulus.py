@@ -12,12 +12,7 @@ class MultiStimulus:
 
         self.make_shapes()
 
-        # Motion and stimulus configuration
-        self.motion_dirs        = np.linspace(0,2*np.pi-2*np.pi/par['num_motion_dirs'],par['num_motion_dirs'])
-        self.stimulus_dirs      = np.linspace(0,2*np.pi-2*np.pi/(par['num_motion_tuned']//2),(par['num_motion_tuned']//2))
-        self.pref_motion_dirs   = np.reshape(np.linspace(0,2*np.pi-2*np.pi/(par['num_motion_tuned']//2), \
-            (par['num_motion_tuned']//2)), (par['num_motion_tuned']//2,1))
-        self.modality_size      = (par['num_motion_tuned'])//2
+        self.make_directions()
 
         self.fix_time = 400
 
@@ -44,15 +39,25 @@ class MultiStimulus:
         self.rule_signal_factor = 1. if par['include_rule_signal'] else 0.
 
 
+    def make_directions(self):
+
+        # Motion and stimulus configuration
+        self.motion_dirs        = np.linspace(0,2*np.pi-2*np.pi/par['num_motion_dirs'],par['num_motion_dirs'])
+        self.stimulus_dirs      = np.linspace(0,2*np.pi-2*np.pi/(par['num_motion_tuned']//2),(par['num_motion_tuned']//2))
+        self.pref_motion_dirs   = np.reshape(np.linspace(0,2*np.pi-2*np.pi/(par['num_motion_tuned']//2), \
+            (par['num_motion_tuned']//2)), (par['num_motion_tuned']//2,1))
+        self.modality_size      = (par['num_motion_tuned'])//2
+
+
     def make_shapes(self):
 
         # Shape configuration
-        self.input_shape    = [par['num_time_steps'], self.batch_size ,par['n_input'] ]
-        self.output_shape   = [par['num_time_steps'], self.batch_size ,par['n_output'] ]
-        self.stimulus_shape = [par['num_time_steps'], self.batch_size ,par['num_motion_tuned'] ]
-        self.response_shape = [par['num_time_steps'], self.batch_size ,par['num_motion_dirs'] ]
-        self.fixation_shape = [par['num_time_steps'], self.batch_size ,par['num_fix_tuned'] ]
-        self.rule_shape = [par['num_time_steps'], self.batch_size ,par['num_rule_tuned'] ]
+        self.input_shape    = [par['num_time_steps'], self.batch_size, par['n_input']]
+        self.output_shape   = [par['num_time_steps'], self.batch_size, par['n_output']]
+        self.stimulus_shape = [par['num_time_steps'], self.batch_size, par['num_motion_tuned']]
+        self.response_shape = [par['num_time_steps'], self.batch_size, par['num_motion_dirs']]
+        self.fixation_shape = [par['num_time_steps'], self.batch_size, par['num_fix_tuned']]
+        self.rule_shape     = [par['num_time_steps'], self.batch_size, par['num_rule_tuned']]
         self.mask_shape     = [par['num_time_steps'], self.batch_size]
 
 
@@ -114,10 +119,14 @@ class MultiStimulus:
         return self.task_types
 
 
-    def generate_trial(self, current_task, batch_size):
+    def generate_trial(self, current_task, batch_size, restriction=None):
 
         self.batch_size = batch_size
         self.make_shapes()
+        self.make_directions()
+
+        if restriction is not None:
+            self.motion_dirs = self.motion_dirs[restriction]
 
         self.trial_info = {
             'neural_input'   : np.random.normal(par['input_mean'], par['noise_in'], size=self.input_shape),

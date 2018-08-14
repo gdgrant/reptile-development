@@ -23,13 +23,14 @@ class Model:
 
     """ RNN model for supervised and reinforcement learning training """
 
-    def __init__(self, input_data, target_data, mask, gating):
+    def __init__(self, input_data, target_data, mask, gating, step_size):
 
         # Load input activity, target data, training mask, etc.
         self.input_data         = tf.unstack(input_data, axis=0)
         self.target_data        = tf.unstack(target_data, axis=0)
         self.gating             = tf.reshape(gating, [1,-1])
         self.time_mask          = tf.unstack(mask, axis=0)
+        self.step_size          = step_size
 
         self.batch_by_one = tf.ones_like(self.input_data[0][:,0:1])
 
@@ -219,6 +220,12 @@ class Model:
         epsilon = 1e-7
         adam_optimizer = AdamOpt.AdamOpt(tf.trainable_variables(), learning_rate=par['learning_rate'])
 
+        # Backup vars for Reptile
+        self.backup_vars = [tf.get_variable(var.op.name+'_backup', initializer=var, trainable=False) for var in tf.trainable_variables()]
+
+        self.make_saved_inter_vars = self.save_inter_vars()
+        self.interpolate_saved_inter_vars = self.interpolate_from_saved_vars()
+
         # Spiking activity loss
         self.spike_loss = par['spike_cost']*tf.reduce_mean(tf.stack([mask*time_mask*tf.reduce_mean(h) \
             for (h, mask, time_mask) in zip(self.h, self.mask, self.time_mask)]))
@@ -277,6 +284,20 @@ class Model:
         self.make_recurrent_weights_positive()
 
 
+    def save_inter_vars(self):
+        assigns = []
+        for var, stored_var in zip(tf.trainable_variables(), self.backup_vars):
+            assigns.append(tf.assign(stored_var, var))
+        return tf.group(*assigns)
+
+
+    def interpolate_from_saved_vars(self):
+        assigns = []
+        for var, stored_var in zip(tf.trainable_variables(), self.backup_vars):
+            assigns.append(tf.assign(var, stored_var + self.step_size*(var-stored_var)))
+        return tf.group(*assigns)
+
+
     def make_recurrent_weights_positive(self):
         """ Very slightly de-saturate recurrent weights """
 
@@ -304,6 +325,7 @@ def supervised_learning(save_fn='test.pkl', gpu_id=None):
     y = tf.placeholder(tf.float32, [par['num_time_steps'], None, par['n_output']], 'out')
     m = tf.placeholder(tf.float32, [par['num_time_steps'], None], 'mask')
     g = tf.placeholder(tf.float32, [par['n_hidden']], 'gating')
+    s = tf.placeholder(tf.float32, [], 'step')
 
     # Set up stimulus and accuracy recording
     stim = stimulus.MultiStimulus()
@@ -320,74 +342,111 @@ def supervised_learning(save_fn='test.pkl', gpu_id=None):
         # Select CPU or GPU
         device = '/cpu:0' if gpu_id is None else '/gpu:0'
         with tf.device(device):
-            model = Model(x, y, m, g)
+            model = Model(x, y, m, g, s)
 
         # Initialize variables and start the timer
+        saver = tf.train.Saver()
         sess.run(tf.global_variables_initializer())
         t_start = time.time()
 
-        # Begin training loop, iterating over tasks
-        for task in range(par['n_tasks']):
+        saver.save(sess, './init.ckpt')
+
+        evaluated_accuracies = np.zeros(par['n_tasks'])
+        evaluated_accuracies_with_fixation = np.zeros(par['n_tasks'])
+        for evaluation_task in range(par['n_tasks']):
+
+            saver.restore(sess, './init.ckpt')
+
+            print('\n'+'-'*40+'\nTraining to evaluate on task {}.\n'.format(evaluation_task)+'-'*40)
+            training_tasks = list(set(list(range(par['n_tasks']))) - set([evaluation_task]))
+
+            print('\nPre-Training... [{} steps]'.format(par['k_steps']))
             for i in range(par['pre_train_batches']):
 
-                # Generate a batch of stimulus data for training
-                name, stim_in, y_hat, mk, _ = stim.generate_trial(task, par['pre_train_batch_size'])
+                task = np.random.choice(training_tasks)
+                step_size = par['epsilon']*(1-i/(par['pre_train_batches']))
+                _, stim_in, y_hat, mk, _ = stim.generate_trial(task, par['pre_train_batch_size'])
 
-                # Put together the feed dictionary
                 feed_dict = {x:stim_in, y:y_hat, g:par['gating'][task], m:mk}
 
-                # Run the model using one of the available stabilization methods
-                _, loss, spike_loss, output = sess.run([model.train_op, model.pol_loss, \
-                    model.spike_loss, model.output], feed_dict=feed_dict)
+                sess.run(model.make_saved_inter_vars)
+                bvs = sess.run(model.backup_vars)
 
-                # Display network performance
-                if i%25 == 0:
-                    acc = get_perf(y_hat, output, mk, par['pre_train_batch_size'])
-                    print('Iter {} | Task name {} | Accuracy {} | Loss {} | Spike Loss {}'.format(\
-                        i, name, acc, loss, spike_loss))
+                for k in range(par['k_steps']):
+                    if k < par['k_steps']-1:
+                        sess.run(model.train_op, feed_dict=feed_dict)
+                    else:
+                        _, loss, spike_loss, output = sess.run([model.train_op, model.pol_loss, \
+                            model.spike_loss, model.output], feed_dict=feed_dict)
 
-            quit('Quit at end of task 0.')
-            # Test all tasks at the end of each learning session
-            num_reps = 10
-            task_activity_list = []
-            for task_prime in range(task+1):
-                for r in range(num_reps):
+                sess.run(model.interpolate_saved_inter_vars, feed_dict={s:step_size})
 
-                    # Generate stimulus batch for testing
-                    name, stim_in, y_hat, mk, _ = stim.generate_trial(task_prime, par['batch_size'])
+                if i%100 == 0:
+                    acc_with_fix, acc_without_fix = get_perf(y_hat, output, mk, par['pre_train_batch_size'])
+                    print('Iter. {:5} | Loss: {:5.3f} | Spike Loss: {:5.3f} | Acc: {:5.3f}'.format(i, loss, spike_loss, acc_without_fix))
 
-                    # Assemble feed dict and run model
-                    feed_dict = {x:stim_in, g:par['gating'][task_prime]}
-                    output, h = sess.run([model.output, model.h], feed_dict=feed_dict)
 
-                    # Record results
-                    acc = get_perf(y_hat, output, mk)
-                    accuracy_grid[task,task_prime] += acc/num_reps
+            saver.save(sess, './pretrained.ckpt')
 
-                # Record network activity
-                task_activity_list.append(h)
+            print('\nTraining and testing... [{}-shot, {}-way]'.format(par['n_shots'], par['n_ways']))
+            acc_with_fix_list = []
+            acc_without_fix_list = []
+            for i in range(par['test_repetitions']):
 
-            # Aggregate task after testing each task set
-            # Each of [all tasks] elements is [tasks tested, time steps, batch size hidden size]
-            full_activity_list.append(task_activity_list)
+                saver.restore(sess, './pretrained.ckpt')
 
-            # Display accuracy grid after testing is complete
-            print('Accuracy grid after task {}:'.format(task))
-            print(accuracy_grid[task,:])
-            print()
+                restriction = np.random.choice(par['num_motion_dirs'], size=2, replace=False)
 
-            # Reset the Adam Optimizer and save previous parameter values as current ones
-            sess.run(model.reset_adam_op)
+                for j in range(10): #par['n_shots']):
 
-            # Reset weights between tasks if called upon
-            if par['reset_weights']:
-                sess.run(model.reset_weights)
+                    _, stim_in, y_hat, mk, _ = stim.generate_trial(evaluation_task, par['eval_batch_size']) #, restriction)
+                    feed_dict = {x:stim_in, y:y_hat, g:par['gating'][evaluation_task], m:mk}
+
+                    _, loss, spike_loss, output = sess.run([model.train_op, model.pol_loss, \
+                        model.spike_loss, model.output], feed_dict=feed_dict)
+
+                    if j%(par['n_shots']-1) == 0:
+                        print('Iter. {:3} | Mean Loss: {:5.3f}'.format(j, np.mean(loss)))
+
+                for t in range(par['test_iterations']):
+
+                    _, stim_in, y_hat, mk, _ = stim.generate_trial(evaluation_task, par['test_batch_size'])
+                    feed_dict = {x:stim_in, y:y_hat, g:par['gating'][evaluation_task], m:mk}
+
+                    _, loss, spike_loss, output = sess.run([model.train_op, model.pol_loss, \
+                        model.spike_loss, model.output], feed_dict=feed_dict)
+
+                    acc_with_fix, acc_without_fix = get_perf(y_hat, output, mk, par['test_batch_size'])
+                    acc_with_fix_list.append(acc_with_fix)
+                    acc_without_fix_list.append(acc_without_fix)
+
+                print('Mean evaluation accuracy for k={} at rep {}: {:5.3f}%\n'.format(par['k_steps'], i, 100*np.mean(acc_without_fix_list)))
+
+            evaluated_accuracies[evaluation_task] = np.mean(acc_without_fix_list)
+            print('\nAll accuracies post-evaluation, excluding fixation:')
+            print(evaluated_accuracies)
+
+            evaluated_accuracies_with_fixation[evaluation_task] = np.mean(acc_with_fix_list)
+            print('\nAll accuracies post-evaluation, including fixation:')
+            print(evaluated_accuracies_with_fixation)
+
+            print('\n')
+
+
+
+        """# Reset the Adam Optimizer and save previous parameter values as current ones
+        sess.run(model.reset_adam_op)
+
+        # Reset weights between tasks if called upon
+        if par['reset_weights']:
+            sess.run(model.reset_weights)
 
         if par['save_analysis']:
             save_results = {'task': task, 'accuracy_grid': accuracy_grid, 'par': par, 'activity': full_activity_list}
-            pickle.dump(save_results, open(par['save_dir'] + save_fn, 'wb'))
+            pickle.dump(save_results, open(par['save_dir'] + save_fn, 'wb'))"""
 
     print('\nModel execution complete. (Supervised)')
+    return evaluated_accuracies
 
 
 def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
@@ -497,7 +556,7 @@ def reinforcement_learning(save_fn='test.pkl', gpu_id=None):
             if par['stabilization'] == 'pathint':
                 sess.run(model.reset_small_omega)
 
-    print('\nModel execution complete. (Reinforcement)')
+    print('\nModel execution complete. (Reinforcement)')"""
 
 
 def print_key_info():
@@ -514,7 +573,7 @@ def print_key_info():
     print('Key info:')
     print('-'*40)
     for k in key_info:
-        print(k, ' ', par[k])
+        print(k.ljust(20), par[k])
     print('-'*40)
 
 
@@ -537,12 +596,16 @@ def get_perf(target, output, mask, batch_size):
     on in another words, when target[:,:,-1] is not 0 """
 
     output = np.stack(output, axis=0)
+
+    target_arg = np.argmax(target, axis = 2)
+    output_arg = np.argmax(output, axis = 2)
+
     mk = mask*np.reshape(target[:,:,-1] == 0, (batch_size, par['num_time_steps'], 1))
 
-    target = np.argmax(target, axis = 2)
-    output = np.argmax(output, axis = 2)
+    acc_with_fix = np.sum(np.float32(target_arg == output_arg)*mask)/np.sum(mask)
+    acc_without_fix = np.sum(np.float32(target_arg == output_arg)*mk)/np.sum(mk)
 
-    return np.sum(np.float32(target == output)*np.squeeze(mk))/np.sum(mk)
+    return acc_with_fix, acc_without_fix
 
 
 def append_model_performance(model_performance, reward, entropy_loss, pol_loss, val_loss, trial_num):
@@ -577,11 +640,13 @@ def main(save_fn='testing', gpu_id=None):
 
     # Identify learning method and run accordingly
     if par['training_method'] == 'SL':
-        supervised_learning(save_fn, gpu_id)
+        accuracy = supervised_learning(save_fn, gpu_id)
     elif par['training_method'] == 'RL':
-        reinforcement_learning(save_fn, gpu_id)
+        accuracy = reinforcement_learning(save_fn, gpu_id)
     else:
         raise Exception('Select a valid learning method.')
+
+    return accuracy
 
 
 if __name__ == '__main__':

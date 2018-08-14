@@ -13,7 +13,7 @@ global par
 par = {
     # Setup parameters
     'save_dir'              : './savedir/',
-    'stabilization'         : 'pathint',    # 'EWC' (Kirkpatrick method) or 'pathint' (Zenke method)
+    'stabilization'         : None,    # 'EWC' (Kirkpatrick method) or 'pathint' (Zenke method)
     'save_analysis'         : False,
     'reset_weights'         : False,        # reset weights between tasks
 
@@ -27,7 +27,7 @@ par = {
     # Network shape
     'num_motion_tuned'      : 64,
     'num_fix_tuned'         : 4,
-    'num_rule_tuned'        : 0,
+    'num_rule_tuned'        : 20,
     'n_hidden'              : 256,
     'n_val'                 : 1,
     'include_rule_signal'   : True,
@@ -69,18 +69,19 @@ par = {
     'U_std'                 : 0.45,
 
     # Reptile-specific parameters
-    'k_steps'               : 5,
-    'n_ways'                : 5,
+    'num_eval_tasks'        : 1,
+    'k_steps'               : 1,
+    'n_ways'                : 1,
     'n_shots'               : 5,
     'epsilon'               : 1.,
 
     # Training specs
     'meta_batch_size'       : 5,
     'pre_train_batch_size'  : 10,
-    'pre_train_batches'     : int(1e4),
+    'pre_train_batches'     : int(1e3)*5,
     'eval_iterations'       : 50,
     'eval_batch_size'       : 5,
-    'test_repetitions'      : 1000,
+    'test_repetitions'      : 20,
     'test_iterations'       : 20,
     'test_batch_size'       : 100,
 
@@ -129,6 +130,7 @@ def update_dependencies():
     ###
     ### Putting together network structure
     ###
+
 
     # Turn excitatory-inhibitory settings on or off
     if par['architecture'] == 'BIO':
