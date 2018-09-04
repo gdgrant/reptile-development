@@ -24,7 +24,6 @@ par = {
 
     # Reptile-specific parameters
     'k_steps'               : 5,
-    'k_steps_dummy'         : 1,
     'n_ways'                : 5,
     'n_shots'               : 5,
     'epsilon'               : 1.,
@@ -38,7 +37,7 @@ par = {
     'eval_iterations'       : 50,
     'eval_batch_size'       : 5,
 
-    'test_repetitions'      : 1000,
+    'test_repetitions'      : 20,
     'test_iterations'       : 20,
     'test_batch_size'       : 100,
 
